@@ -1,10 +1,13 @@
+import pandas as pd
+import numpy as np
 
 
-dict = {}
+elements = []
+f = open('models/bert_tokenizer_dic/bert_tok.txt', 'r', encoding='utf-8')
 
-if 'test' in dict.keys():
-    dict['test'] += 1
-else:
-    dict['test'] = 1
+text = f.read()
 
-print(dict.keys())
+dic = text.split('\n')
+
+for itm in dic:
+    print(itm)

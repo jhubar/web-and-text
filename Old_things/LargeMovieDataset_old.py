@@ -3,10 +3,11 @@ import os
 import pandas as pd
 from torch.utils.data import Dataset, TensorDataset
 import sys
+import nltk         # For word tokenization
 import pickle
+from nltk.tokenize.punkt import PunktBaseClass
+nltk.download('punkt')
 import torch
-from tokenizers import BertWordPieceTokenizer
-import requests
 
 class LargeMovieDataset(Dataset):
 
@@ -82,26 +83,21 @@ class LargeMovieDataset(Dataset):
             self.data_text = tmp_txt
             self.data_sentiment = tmp_sent
 
-            # tokenize data: note: vocabulary file https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-vocab.txt'
-            self.tokenizer = BertWordPieceTokenizer('models/bert_tokenizer_dic/bert_tok.txt', lowercase=True)
-            self.token_seq = []
-            # Store also index sequences
-            self.idx_seq = []
+            # tokenize data
+            self.data_tokens = []
             for itm in self.data_text:
-                tok_seq = self.tokenizer.encode(itm.lower())
-                self.token_seq.append(tok_seq.tokens)
-                self.idx_seq.append(tok_seq.ids)
+                self.data_tokens.append(nltk.word_tokenize(itm.lower()))
 
             # Get a dictionnary with all tokens
             self.dictionary = {}
-            # Load bert pre trained dict
-            f = open('models/bert_tokenizer_dic/bert_tok.txt', 'r', encoding='utf-8')
-            raw_dic = f.read()
-            raw_dic = raw_dic.split('\n')
-            f.close()
-            for i in range(0, len(raw_dic)):
-                word = raw_dic[i]
-                self.dictionary[str(word)] = i
+            word_idx = 0
+            for itm in self.data_tokens:
+                for tok in itm:
+                    if tok in self.dictionary.keys():
+                        continue
+                    else:
+                        self.dictionary[tok] = word_idx
+                        word_idx += 1
 
             # Build an inverse dictionary to get tokens from index
             self.dictionary_inv = {}
@@ -109,42 +105,50 @@ class LargeMovieDataset(Dataset):
                 idx = self.dictionary[key]
                 self.dictionary_inv[str(idx)] = key
 
+            # Build tensors word index (so not true one hot encoding
+            self.data_one_hot = []
+            for sentence in self.data_tokens:
+                sn_tns = torch.zeros(len(sentence))
+                for i in range(0, len(sentence)):
+                    sn_tns[i] = self.dictionary[sentence[i]]
+                self.data_one_hot.append(sn_tns)
+
             # split train and test_set
             split_idx = int(len(self.data_text) * self.train_split)
             self.data_text_train = self.data_text[0:split_idx]
             self.data_sentiment_train = self.data_sentiment[0:split_idx]
-            self.token_seq_train = self.token_seq[0:split_idx]
-            self.idx_seq_train = self.idx_seq[0:split_idx]
+            self.data_tokens_train = self.data_tokens[0:split_idx]
+            self.data_one_hot_train = self.data_one_hot[0:split_idx]
 
             self.data_text_test = self.data_text[split_idx:]
             self.data_sentiment_test = self.data_sentiment[split_idx:]
-            self.token_seq_test = self.token_seq[split_idx:]
-            self.idx_seq_test = self.idx_seq[split_idx:]
+            self.data_tokens_test = self.data_tokens[split_idx:]
+            self.data_one_hot_test = self.data_one_hot[split_idx:]
 
             # Store the prepared dataset to a pickle
             with open('{}/train_seri.pkl'.format(self.data_path), 'wb') as f:
                 pickle.dump([self.data_text_train,
-                             self.token_seq_train,
+                             self.data_tokens_train,
                              self.data_sentiment_train,
                              self.dictionary,
                              self.dictionary_inv,
-                             self.idx_seq_train], f)
+                             self.data_one_hot_train], f)
 
             with open('{}/test_seri.pkl'.format(self.data_path), 'wb') as f:
                 pickle.dump([self.data_text_test,
-                             self.token_seq_test,
+                             self.data_tokens_test,
                              self.data_sentiment_test,
                              self.dictionary,
                              self.dictionary_inv,
-                             self.idx_seq_test], f)
+                             self.data_one_hot_test], f)
 
         # Unserialize data
         if train:
             with open('{}/train_seri.pkl'.format(self.data_path), 'rb') as f:
-                self.data_text, self.tokens_seq, self.data_sentiments, self.dictionary, self.dictionary_inv, self.idx_seq = pickle.load(f)
+                self.data_text, self.data_tokens, self.data_sentiments, self.dictionary, self.dictionary_inv, self.data_one_hot = pickle.load(f)
         else:
             with open('{}/test_seri.pkl'.format(self.data_path), 'rb') as f:
-                self.data_text, self.token_seq, self.data_sentiments, self.dictionary, self.dictionary_inv, self.idx_seq = pickle.load(f)
+                self.data_text, self.data_tokens, self.data_sentiments, self.dictionary, self.dictionary_inv, self.data_one_hot = pickle.load(f)
 
 
     def __len__(self):
@@ -154,11 +158,11 @@ class LargeMovieDataset(Dataset):
     def __getitem__(self, index):
 
         # Get indexes of each words
-        idx_seq = self.idx_seq[index]
+        idx_seq = self.data_one_hot[index]
         # Build one hot encoding from indexes
         one_hot = torch.zeros(len(idx_seq), len(self.dictionary.keys()))
         for i in range(0, len(idx_seq)):
-            idx = int(idx_seq[i])
+            idx = int(idx_seq[i].item())
             one_hot[i, idx] = 1
 
         return one_hot.to(self.device), self.data_sentiments[index]
