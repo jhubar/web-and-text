@@ -15,7 +15,8 @@ class LargeMovieDataset(Dataset):
                  train_split=0.8,
                  data_path="G:/web_and_text_project/data/Large_movie_dataset/aclImdb/",
                  recover_serialized=True,
-                 device='cpu'):
+                 device='cpu',
+                 output_mode='word2vec'):
         """
         Create a dataset object
         :param train: Give True if train set or False if test set
@@ -39,6 +40,15 @@ class LargeMovieDataset(Dataset):
         self.seed = 1
         # Device for output tensors
         self.device = device
+        # Define the way to output data
+        self.output_form = output_mode
+
+        # Data available:
+        self.token_seq = None
+        self.idx_seq = None
+        self.data_sentiments = None
+        self.dictionary = None
+        self.dictionary_inv = None
 
         # If we have to prepare a new dataset from raw data
         if not recover_serialized:
@@ -142,10 +152,11 @@ class LargeMovieDataset(Dataset):
         if train:
             with open('{}/train_seri.pkl'.format(self.data_path), 'rb') as f:
                 self.data_text, self.tokens_seq, self.data_sentiments, self.dictionary, self.dictionary_inv, self.idx_seq = pickle.load(f)
+            print('Train set restored')
         else:
             with open('{}/test_seri.pkl'.format(self.data_path), 'rb') as f:
                 self.data_text, self.token_seq, self.data_sentiments, self.dictionary, self.dictionary_inv, self.idx_seq = pickle.load(f)
-
+            print('Test set restored')
 
     def __len__(self):
 
@@ -153,15 +164,39 @@ class LargeMovieDataset(Dataset):
 
     def __getitem__(self, index):
 
-        # Get indexes of each words
-        idx_seq = self.idx_seq[index]
-        # Build one hot encoding from indexes
-        one_hot = torch.zeros(len(idx_seq), len(self.dictionary.keys()))
-        for i in range(0, len(idx_seq)):
-            idx = int(idx_seq[i])
-            one_hot[i, idx] = 1
+        # If we want data for word2vec training
+        if self.output_form == 'word2vec':
+            # Get the index list
+            idx_lst = self.idx_seq[index]
+            # Build one hot encoding tensor to obtain the center word tensor
+            center_word = torch.tensor(idx_lst.shape[0], len(self.dictionary.keys()))
+            # Get ones at each index
+            center_word[:, idx_lst] = 1
+            # Get left context words =
+            left_context = torch.zeros(center_word.shape)
+            # With zero index as first word and last word
+            left_context[0, 0] = 1
+            left_context[1:, :] = center_word[0:-2, :]
+            # Same for right context word
+            right_context = torch.zeros(center_word.shape)
+            right_context[-1, 0] = 1
+            right_context[0:-2, :] = center_word[1:, :]
 
-        return one_hot.to(self.device), self.data_sentiments[index]
+            return center_word, left_context, right_context
+
+
+
+
+        else:
+            # Get indexes of each words
+            idx_seq = self.idx_seq[index]
+            # Build one hot encoding from indexes
+            one_hot = torch.zeros(len(idx_seq), len(self.dictionary.keys()))
+            for i in range(0, len(idx_seq)):
+                idx = int(idx_seq[i])
+                one_hot[i, idx] = 1
+
+            return one_hot.to(self.device), self.data_sentiments[index]
 
 
 
@@ -182,7 +217,7 @@ if __name__ == '__main__':
     """
 
     # Instanciate the dataset
-    dataset = LargeMovieDataset(train=True)
+    dataset = LargeMovieDataset(train=True, output_mode='none')
 
     # Get a data entry
     one_hot_sentence, sentiment = dataset.__getitem__(index=29)

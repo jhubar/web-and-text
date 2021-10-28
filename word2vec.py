@@ -3,13 +3,14 @@ import pandas as pd
 import torch
 from LargeMovieDataset import LargeMovieDataset
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
-
+import sys
 
 class Word2Vec(torch.nn.Module):
 
     def __init__(self,
                  input_voc,
                  embed_size=200):
+        super(Word2Vec, self).__init__()
 
         self.dic = input_voc
         self.embed_size = embed_size
@@ -54,8 +55,8 @@ def train_Word2Vec():
     device = 'cpu'
 
     # Load datasets
-    train_set = LargeMovieDataset(train=True, recover_serialized=True)
-    test_set = LargeMovieDataset(train=False, recover_serialized=True)
+    train_set = LargeMovieDataset(train=True, recover_serialized=True, device=device, output_mode='word2vec')
+    test_set = LargeMovieDataset(train=False, recover_serialized=True, device=device, output_mode='word2vec')
 
     # Get data loaders
     train_loader = DataLoader(
@@ -78,16 +79,12 @@ def train_Word2Vec():
     epoch_idx = 0
     for i in range(0, epoch):
 
-        for step, (sentences, sentiments) in enumerate(train_loader):
+        for step, (center_word, left_word, right_word) in enumerate(train_loader):
 
-            for seq in sentences:
-                # Get one hot encoding for the sentence
-                input_one_hot = torch.zeros((len(seq), model.voc_size)).to(device)
-                for j in range(0, len(seq)):
-                    input_one_hot[j, seq[j]] = 1
+            print(center_word.shape, left_word.shape, right_word.shape)
 
-                # Make prediction for the sentence
-                preds = model(input_one_hot)
+            sys.exit(0)
+
 
 
 
@@ -100,3 +97,6 @@ def train_Word2Vec():
 
 
 
+if __name__ == '__main__':
+
+    train_Word2Vec()
