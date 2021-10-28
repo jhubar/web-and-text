@@ -198,7 +198,7 @@ if __name__ == '__main__':
 
         sentence.append(dataset.dictionary_inv[str(idx)])
 
-    final_text = ''.join(sentence)
+    final_text = ' '.join(sentence)
     print(final_text)
 
 
