@@ -15,7 +15,8 @@ class LargeMovieDataset(Dataset):
                  train=True,
                  train_split=0.8,
                  data_path="G:/web_and_text_project/data/Large_movie_dataset/aclImdb/",
-                 recover_serialized=True):
+                 recover_serialized=True,
+                 device='cpu'):
         """
         Create a dataset object
         :param train: Give True if train set or False if test set
@@ -37,6 +38,8 @@ class LargeMovieDataset(Dataset):
         self.train = train
         # The seed used to shuffle
         self.seed = 1
+        # Device for output tensors
+        self.device = device
 
         # If we have to prepare a new dataset from raw data
         if not recover_serialized:
@@ -96,6 +99,12 @@ class LargeMovieDataset(Dataset):
                         self.dictionary[tok] = word_idx
                         word_idx += 1
 
+            # Build an inverse dictionary to get tokens from index
+            self.dictionary_inv = {}
+            for key in self.dictionary.keys():
+                idx = self.dictionary[key]
+                self.dictionary_inv[str(idx)] = key
+
             # Build tensors word index (so not true one hot encoding
             self.data_one_hot = []
             for sentence in self.data_tokens:
@@ -122,6 +131,7 @@ class LargeMovieDataset(Dataset):
                              self.data_tokens_train,
                              self.data_sentiment_train,
                              self.dictionary,
+                             self.dictionary_inv,
                              self.data_one_hot_train], f)
 
             with open('{}/test_seri.pkl'.format(self.data_path), 'wb') as f:
@@ -129,15 +139,16 @@ class LargeMovieDataset(Dataset):
                              self.data_tokens_test,
                              self.data_sentiment_test,
                              self.dictionary,
+                             self.dictionary_inv,
                              self.data_one_hot_test], f)
 
         # Unserialize data
         if train:
             with open('{}/train_seri.pkl'.format(self.data_path), 'rb') as f:
-                self.data_text, self.data_tokens, self.data_sentiments, self.dictionary, self.data_one_hot = pickle.load(f)
+                self.data_text, self.data_tokens, self.data_sentiments, self.dictionary, self.dictionary_inv, self.data_one_hot = pickle.load(f)
         else:
             with open('{}/test_seri.pkl'.format(self.data_path), 'rb') as f:
-                self.data_text, self.data_tokens, self.data_sentiments, self.dictionary, self.data_one_hot = pickle.load(f)
+                self.data_text, self.data_tokens, self.data_sentiments, self.dictionary, self.dictionary_inv, self.data_one_hot = pickle.load(f)
 
 
     def __len__(self):
@@ -146,7 +157,15 @@ class LargeMovieDataset(Dataset):
 
     def __getitem__(self, index):
 
-        return self.data_one_hot[index], self.data_sentiments[index]
+        # Get indexes of each words
+        idx_seq = self.data_one_hot[index]
+        # Build one hot encoding from indexes
+        one_hot = torch.zeros(len(idx_seq), len(self.dictionary.keys()))
+        for i in range(0, len(idx_seq)):
+            idx = int(idx_seq[i].item())
+            one_hot[i, idx] = 1
+
+        return one_hot.to(self.device), self.data_sentiments[index]
 
 
 
@@ -162,12 +181,28 @@ class LargeMovieDataset(Dataset):
 
 
 if __name__ == '__main__':
+    """
+    Example of usage
+    """
 
-
+    # Instanciate the dataset
     dataset = LargeMovieDataset(train=True)
 
-    print(len(dataset.data_one_hot))
+    # Get a data entry
+    one_hot_sentence, sentiment = dataset.__getitem__(index=29)
+    one_hot_sentence = one_hot_sentence.cpu().numpy()
+    print(one_hot_sentence.shape)
+    # Get words index:
+    word_idx = np.argmax(one_hot_sentence, axis=1)
 
-    dataset.__getitem__(index=29)
+    # Get the index of each word by an argmax in the one hot encoding
+    # and get the word in the inverse dictionary
+    sentence = []
+    for idx in word_idx:
 
-    print(dataset.dictionary)
+        sentence.append(dataset.dictionary_inv[str(idx)])
+
+    final_text = ''.join(sentence)
+    print(final_text)
+
+
