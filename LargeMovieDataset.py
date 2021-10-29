@@ -1,239 +1,192 @@
-import numpy as np
-import os
-import pandas as pd
-from torch.utils.data import Dataset, TensorDataset
-import sys
-import pickle
 import torch
-from tokenizers import BertWordPieceTokenizer
-import requests
+import pandas
+import numpy as np
+from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
+#from tokenizers import BertWordPieceTokenizer
+from transformers import BertTokenizer
+import pickle
+import os
 
-class LargeMovieDataset(Dataset):
+class TrainSetBuilder():
 
     def __init__(self,
-                 train=True,
-                 train_split=0.8,
                  data_path="G:/web_and_text_project/data/Large_movie_dataset/aclImdb/",
-                 recover_serialized=True,
-                 device='cpu',
-                 output_mode='word2vec'):
+                 load_pickle=True,
+                 num_workers=0,
+                 batch_size=10):
         """
-        Create a dataset object
-        :param train: Give True if train set or False if test set
-        :param train_split: The proportion of the dataset used for the train set
-        :param data_path: The path to the dataset folder
-        :param recover_serialized: If False: Create the dataset from the initial data:
-        Load all text and labels, tokenize the text and create a dictionary of all tokens
-        and finally save all in a pickle (takes some time and do this for both train and)
-        test set)
-        If False: Try to recover a previously serialized dataset (fast)
+        This class manage the building of the LargeMovieDataset building
+        and use.
+        :param data_path: the path to the aclImdb folder of the dataset
+        :param load_pickle: If it's the first run: select false to build
+        a serialized dataset (slow)
+        If serialized dataset already build: turn on True for fast opening
+        :param num_workers: Num of workers for the data data loaders
+        :param batch_size: The size of batches produces by data loaders
 
+        Use "inport_cine_data()" to prepare the dataset before use
+        Use "get_dataloaders()" to obtain train and test dataloaders
+
+        Batch outputs:
+            - batch[0] = index sequence (tensor)
+            - batch[1] = attention mask (contain ones for each words and
+                    zeros in front of padding tokens
+            - batch[2] = sentiments (tensor)
         """
 
-        # The path to the large movie dataset folder
+        # Hyper parameters
+        self.max_len = 500      # Maximum number of words in a sequence
+        self.train_split = 0.8  # Propotion of the dataset for training set
+        self.batch_size = batch_size    # Number of elements in a batch
+        self.num_workers=num_workers
+
+        # Training dataset
+        self.train_dataset = None
+        # Testing dataset
+        self.test_dataset = None
+        # Classes
+        self.class_labels = ['Negative', 'Positive']
+
+        # Data handlers
+        self.train_handler = None
+        self.test_handler = None
+
+        # Load the tokenizer
+        self.tokenizer = BertTokenizer(vocab_file='models/bert_tokenizer_dic/bert_tok.txt',
+                                       do_lower_case=True)
+
+        # Get a dictionnary with all tokens
+        self.dictionary = {}
+        # Load bert pre trained dict
+        f = open('models/bert_tokenizer_dic/bert_tok.txt', 'r', encoding='utf-8')
+        raw_dic = f.read()
+        raw_dic = raw_dic.split('\n')
+        f.close()
+        for i in range(0, len(raw_dic)):
+            word = raw_dic[i]
+            self.dictionary[str(word)] = i
+
+        # Build an inverse dictionary to get tokens from index
+        self.dictionary_inv = {}
+        for key in self.dictionary.keys():
+            idx = self.dictionary[key]
+            self.dictionary_inv[str(idx)] = key
+
+        # Pahts
         self.data_path = data_path
-        # The proportion of the dataset used for training purposes
-        self.train_split = train_split
-        # If we instanciating a training set, a testing set if false
-        self.train = train
-        # The seed used to shuffle
-        self.seed = 1
-        # Device for output tensors
-        self.device = device
-        # Define the way to output data
-        self.output_form = output_mode
+        # If want to load from scratch or not
+        self.load_pickl = load_pickle
 
-        # Data available:
-        self.token_seq = None
-        self.idx_seq = None
-        self.data_sentiments = None
-        self.dictionary = None
-        self.dictionary_inv = None
+    def import_cine_data(self, reduce=None):
 
-        # If we have to prepare a new dataset from raw data
-        if not recover_serialized:
-            # Get data
-            self.data_text = []
-            self.data_sentiment = []
-            # Different folders who contain data
+        if not self.load_pickl:
+            # Load raw dataset
+            data_text = []
+            data_sentiment = []
             sub_dir_lst = ['test/neg', 'test/pos', 'train/neg', 'train/pos']
+
             idx = 0
             for sub in sub_dir_lst:
                 # Get the sentiment of the folder
-                sentiment = 0   # Negative sentiment
+                sentiment = 0  # Negative sentiment
                 if idx == 1 or idx == 3:
                     sentiment = 1
 
                 # Get list of files in the folder
-                sub_lst = os.listdir('{}{}'.format(self.data_path, sub))
+                sub_lst = os.listdir('{}/{}'.format(self.data_path, sub))
 
                 # Read and store all files in the list
                 for itm in sub_lst:
-
                     f = open('{}{}/{}'.format(self.data_path, sub, itm), 'r', encoding='utf8')
                     readed = f.read()
-                    # Some modifications in the data
-                    readed.replace('<bt />', '')
-                    readed.replace('.', ' . ')
-                    readed.replace('-', ' - ')
-                    readed.replace('/', ' / ')
-                    self.data_text.append(readed)
+                    data_text.append(readed)
                     f.close()
-                    self.data_sentiment.append(sentiment)
-
+                    data_sentiment.append(sentiment)
                 idx += 1
 
             # Shuffle the dataset using fix seed
-            shuf_idx = np.arange(len(self.data_text))
+            shuf_idx = np.arange(len(data_text))
             np.random.shuffle(shuf_idx)
             shuf_idx = shuf_idx.tolist()
-            tmp_txt = [self.data_text[i] for i in shuf_idx]
-            tmp_sent = [self.data_sentiment[i] for i in shuf_idx]
-            self.data_text = tmp_txt
-            self.data_sentiment = tmp_sent
+            tmp_txt = [data_text[i] for i in shuf_idx]
+            tmp_sent = [data_sentiment[i] for i in shuf_idx]
+            reviews = tmp_txt
+            sentiments = tmp_sent
 
-            # tokenize data: note: vocabulary file https://s3.amazonaws.com/models.huggingface.co/bert/bert-base-uncased-vocab.txt'
-            self.tokenizer = BertWordPieceTokenizer('models/bert_tokenizer_dic/bert_tok.txt', lowercase=True)
-            self.token_seq = []
-            # Store also index sequences
-            self.idx_seq = []
-            for itm in self.data_text:
-                tok_seq = self.tokenizer.encode(itm.lower())
-                self.token_seq.append(tok_seq.tokens)
-                self.idx_seq.append(tok_seq.ids)
+            # Encode the batch of data
+            print('Data tokenization...')
+            encoded_batch = self.tokenizer.batch_encode_plus(reviews,
+                                                             add_special_tokens=True,
+                                                             max_length=self.max_len,
+                                                             padding=True,
+                                                             truncation=True,
+                                                             return_attention_mask=True,
+                                                             return_tensors='pt')
 
-            # Get a dictionnary with all tokens
-            self.dictionary = {}
-            # Load bert pre trained dict
-            f = open('models/bert_tokenizer_dic/bert_tok.txt', 'r', encoding='utf-8')
-            raw_dic = f.read()
-            raw_dic = raw_dic.split('\n')
-            f.close()
-            for i in range(0, len(raw_dic)):
-                word = raw_dic[i]
-                self.dictionary[str(word)] = i
-
-            # Build an inverse dictionary to get tokens from index
-            self.dictionary_inv = {}
-            for key in self.dictionary.keys():
-                idx = self.dictionary[key]
-                self.dictionary_inv[str(idx)] = key
-
-            # split train and test_set
-            split_idx = int(len(self.data_text) * self.train_split)
-            self.data_text_train = self.data_text[0:split_idx]
-            self.data_sentiment_train = self.data_sentiment[0:split_idx]
-            self.token_seq_train = self.token_seq[0:split_idx]
-            self.idx_seq_train = self.idx_seq[0:split_idx]
-
-            self.data_text_test = self.data_text[split_idx:]
-            self.data_sentiment_test = self.data_sentiment[split_idx:]
-            self.token_seq_test = self.token_seq[split_idx:]
-            self.idx_seq_test = self.idx_seq[split_idx:]
-
-            # Store the prepared dataset to a pickle
-            with open('{}/train_seri.pkl'.format(self.data_path), 'wb') as f:
-                pickle.dump([self.data_text_train,
-                             self.token_seq_train,
-                             self.data_sentiment_train,
-                             self.dictionary,
-                             self.dictionary_inv,
-                             self.idx_seq_train], f)
-
-            with open('{}/test_seri.pkl'.format(self.data_path), 'wb') as f:
-                pickle.dump([self.data_text_test,
-                             self.token_seq_test,
-                             self.data_sentiment_test,
-                             self.dictionary,
-                             self.dictionary_inv,
-                             self.idx_seq_test], f)
-
-        # Unserialize data
-        if train:
-            with open('{}/train_seri.pkl'.format(self.data_path), 'rb') as f:
-                self.data_text, self.tokens_seq, self.data_sentiments, self.dictionary, self.dictionary_inv, self.idx_seq = pickle.load(f)
-            print('Train set restored')
-        else:
-            with open('{}/test_seri.pkl'.format(self.data_path), 'rb') as f:
-                self.data_text, self.token_seq, self.data_sentiments, self.dictionary, self.dictionary_inv, self.idx_seq = pickle.load(f)
-            print('Test set restored')
-
-    def __len__(self):
-
-        return len(self.data_sentiments)
-
-    def __getitem__(self, index):
-
-        # If we want data for word2vec training
-        if self.output_form == 'word2vec':
-            # Get the index list
-            idx_lst = self.idx_seq[index]
-            # Build one hot encoding tensor to obtain the center word tensor
-            center_word = torch.tensor(idx_lst.shape[0], len(self.dictionary.keys()))
-            # Get ones at each index
-            center_word[:, idx_lst] = 1
-            # Get left context words =
-            left_context = torch.zeros(center_word.shape)
-            # With zero index as first word and last word
-            left_context[0, 0] = 1
-            left_context[1:, :] = center_word[0:-2, :]
-            # Same for right context word
-            right_context = torch.zeros(center_word.shape)
-            right_context[-1, 0] = 1
-            right_context[0:-2, :] = center_word[1:, :]
-
-            return center_word, left_context, right_context
+            # Serialize the dataset
+            with open('{}/serialized_dataset.pkl'.format(self.data_path), 'wb') as f:
+                pickle.dump([data_text, encoded_batch, data_sentiment], f)
 
 
 
 
-        else:
-            # Get indexes of each words
-            idx_seq = self.idx_seq[index]
-            # Build one hot encoding from indexes
-            one_hot = torch.zeros(len(idx_seq), len(self.dictionary.keys()))
-            for i in range(0, len(idx_seq)):
-                idx = int(idx_seq[i])
-                one_hot[i, idx] = 1
-
-            return one_hot.to(self.device), self.data_sentiments[index]
+        # Load serialized dataset
+        with open('{}/serialized_dataset.pkl'.format(self.data_path), 'rb') as reader:
+            reviews, encoded_batch, sentiments = pickle.load(reader)
 
 
+        # If reduce (doesn't load all the dataset
+        if reduce is not None:
+            print('WARNING: reduced dataset: for deboging purposes only')
+            reviews = reviews[0:reduce]
+            sentiments = sentiments[0:reduce]
 
 
+        print('... Done')
+
+        # Get the spliting index
+        split_border = int(len(sentiments)*self.train_split)
+        # Get a tensor for sentiments
+        sentiments = torch.tensor(sentiments)
+        # Now encode datasets tensors
+        print('Tensors encoding...')
+        self.train_dataset = TensorDataset(
+            encoded_batch['input_ids'][:split_border],
+            encoded_batch['attention_mask'][:split_border],
+            sentiments[:split_border])
+        self.test_dataset = TensorDataset(
+            encoded_batch['input_ids'][split_border:],
+            encoded_batch['attention_mask'][split_border:],
+            sentiments[split_border:])
+        print('... Done')
+
+        # Get data handler
+        print('Data handler encoding...')
+        self.train_handler = DataLoader(
+            self.train_dataset,
+            sampler=RandomSampler(self.train_dataset),
+            batch_size=self.batch_size,
+            num_workers=self.num_workers)
+
+        self.test_handler = DataLoader(
+            self.test_dataset,
+            sampler=SequentialSampler(self.test_dataset),
+            batch_size=self.batch_size)
+        print('... Done')
+        print('End of dataset encoding.')
+
+    def get_data_loader(self):
+
+        return self.train_handler, self.test_handler
+
+    def get_tokenizer(self):
+
+        return self.tokenizer
 
 
-
-
-
-
-
-
-
-
+# Testing
 if __name__ == '__main__':
-    """
-    Example of usage
-    """
 
-    # Instanciate the dataset
-    dataset = LargeMovieDataset(train=True, output_mode='none')
-
-    # Get a data entry
-    one_hot_sentence, sentiment = dataset.__getitem__(index=29)
-    one_hot_sentence = one_hot_sentence.cpu().numpy()
-    print(one_hot_sentence.shape)
-    # Get words index:
-    word_idx = np.argmax(one_hot_sentence, axis=1)
-
-    # Get the index of each word by an argmax in the one hot encoding
-    # and get the word in the inverse dictionary
-    sentence = []
-    for idx in word_idx:
-
-        sentence.append(dataset.dictionary_inv[str(idx)])
-
-    final_text = ' '.join(sentence)
-    print(final_text)
-
+    builder = TrainSetBuilder()
+    builder.import_cine_data()
 

@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 import torch
-import LargeMovieDataset
+from LargeMovieDataset import LargeMovieDataset
+from LargeMovieDataset import word2vec_collate_fn
 from torch.utils.data import TensorDataset, DataLoader, RandomSampler, SequentialSampler
 import sys
 from torch.utils.tensorboard import SummaryWriter
@@ -35,12 +36,10 @@ class Word2Vec(torch.nn.Module):
         given dictionary
         """
 
-        # Transform index sequence in one hot encoding
-        x = torch.nn.functional.one_hot(x, num_classes=self.voc_size)
         # First build the input vector
         x = x.reshape(-1, self.voc_size)
         # Apply the first layer
-        x = self.layer_A(x.float())
+        x = self.layer_A(x)
         # If we want to get embedding, we can stop here
         if get_embed:
             return x
@@ -55,25 +54,34 @@ def train_Word2Vec():
     # Hyperparameters
     learning_rate = 1e-5
     epoch = 20
-    batch_size = 15
+    batch_size = 1
     model_name = 'word2vec'
     model_path = 'G:/web_and_text_project/data/Large_movie_dataset/word2vec_model'
     device = "cuda" if torch.cuda.is_available() else "cpu"
     num_workers = 4
 
+    # Load datasets
+    train_set = LargeMovieDataset(train=True, recover_serialized=True, device=device, output_mode='word2vec')
+    test_set = LargeMovieDataset(train=False, recover_serialized=True, device=device, output_mode='word2vec')
 
-    # Load the dataset
-    print('Dataset Loading...')
-    data_builder = LargeMovieDataset.TrainSetBuilder(num_workers=num_workers, batch_size=batch_size)
-    data_builder.import_cine_data()
-    print('... Done')
     # Get data loaders
-    train_loader, test_loader = data_builder.get_data_loader()
-    # Get the tokenier object
-    tokenizer = data_builder.get_tokenizer()
+    train_loader = DataLoader(
+        train_set,
+        shuffle=True,
+        batch_size=batch_size,
+        collate_fn=word2vec_collate_fn,
+        num_workers=num_workers
+    )
+    test_loader = DataLoader(
+        test_set,
+        shuffle=True,
+        batch_size=batch_size,
+        collate_fn=word2vec_collate_fn,
+        num_workers=num_workers
+    )
 
     # Instanciate the model
-    model = Word2Vec(input_voc=data_builder.dictionary).to(device)
+    model = Word2Vec(input_voc=train_set.dictionary).to(device)
 
     # The optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -84,9 +92,31 @@ def train_Word2Vec():
     # Tensorboard object
     tb = SummaryWriter()
 
-    epoch_idx = 0
     # Try to restore existing model if exists
-    if not os.path.exists('{}/{}'.format(model_path, model_name)):
+    model_loaded = False
+    try:
+        model.load_state_dict((torch.load('{}/{}/model_weights.pt'.format(model_path, model_name))))
+        model_loaded = True
+        print('Previous model loaded')
+    except:
+        print('Impossible to load existing model: start a new one')
+    # Try to load optimizer weights
+    if model_loaded:
+        try:
+            optimizer.load_state_dict(torch.load('{}/{}/optimizer_weights.pt'.format(model_path, model_name)))
+            print('Optimizer weights loaded')
+        except:
+            print('Fail to load optimizer weights')
+
+    epoch_idx = 0
+    # Try to load training epoch index using logs
+    if model_loaded:
+        if os.path.exists('{}/{}/train_logs.csv'):
+            train_logs = pd.read_csv('{}/{}/train_logs.csv'.format(model_path, model_name), sep=',')
+            epoch_idx = train_logs[-1, 0] + 1
+
+    # Create new logs file if doesn't exist
+    if not model_loaded:
         os.mkdir('{}/{}'.format(model_path, model_name))
         file = open('{}/{}/train_logs.csv'.format(model_path, model_name), 'w')
         file.write('Epoch,train_loss\n')
@@ -94,23 +124,7 @@ def train_Word2Vec():
         file = open('{}/{}/test_logs.csv'.format(model_path, model_name), 'w')
         file.write('Epoch,train_loss\n')
         file.close()
-    else:
-        # Try to load model's weights
-        try:
-            model.load_state_dict((torch.load('{}/{}/model_weights.pt'.format(model_path, model_name))))
-            model_loaded = True
-            print('Previous model loaded')
-        except:
-            print('Impossible to load existing model: start a new one')
-        # Try to load optimizer weights
-        try:
-            optimizer.load_state_dict(torch.load('{}/{}/optimizer_weights.pt'.format(model_path, model_name)))
-            print('Optimizer weights loaded')
-        except:
-            print('Fail to load optimizer weights')
-        # Load epoch index if the model exists
-        train_logs = pd.read_csv('{}/{}/train_logs.csv'.format(model_path, model_name), sep=',')
-        epoch_idx = train_logs[-1, 0] + 1
+
 
 
     for i in range(epoch_idx, epoch):
@@ -120,21 +134,15 @@ def train_Word2Vec():
 
         model.train()
         train_loss = []
-        for step, batch in enumerate(train_loader):
+        for step, (center_word, context_words) in enumerate(train_loader):
 
-            # Get input ids (NOTE: batch[1] return attention mask and batch[2] return sentiments
-            input_ids = torch.flatten(batch[0].to(device))
-
-            # Extend with zero at the begin and at the end
-            ext_input_ids = torch.zeros(input_ids.size(0) + 2).to(device)
-            ext_input_ids[1:-1] = input_ids
-
+            center_word = center_word.to(device)
+            context_words = context_words.to(device)
             # makes predictions:
-            preds = model(torch.tensor(input_ids))
+            preds = model(torch.tensor(center_word))
 
-            # Compute the loss for left and right context words
-            loss = loss_obj(preds, ext_input_ids[0:-2].long()) + \
-                   loss_obj(preds, ext_input_ids[2:].long())
+            # Compute the loss
+            loss = loss_obj(preds, torch.flatten(context_words.long()))
 
             # Backward
             optimizer.zero_grad()
@@ -160,27 +168,20 @@ def train_Word2Vec():
         test_loss = []
         print('Testing epoch {} / {}'.format(epoch_idx, epoch))
         loop = tqdm(test_loader, leave=True)
-        for step, batch in enumerate(test_loader):
+        for step, (center_word, context_words) in enumerate(test_loader):
             with torch.no_grad():
-                # Get input ids (NOTE: batch[1] return attention mask and batch[2] return sentiments
-                input_ids = torch.flatten(batch[0].to(device))
-
-                # Extend with zero at the begin and at the end
-                ext_input_ids = torch.zeros(input_ids.size(0) + 2).to(device)
-                ext_input_ids[1:-1] = input_ids
-
+                center_word = center_word.to(device)
+                context_words = context_words.to(device)
                 # makes predictions:
-                preds = model(torch.tensor(input_ids))
+                preds = model(torch.tensor(center_word))
 
-                # Compute the loss for left and right context words
-                loss = loss_obj(preds, ext_input_ids[0:-2].long()) + \
-                       loss_obj(preds, ext_input_ids[2:].long())
+                # Compute the loss
+                loss = loss_obj(preds, torch.flatten(context_words.long()))
 
                 # Store logs
                 tb.add_scalar('Test_Loss_{}'.format(model_name), loss.item(), i)
                 test_loss.append(loss.item())
                 loop.set_postfix(loss=loss.item)
-                torch.cuda.empty_cache()
 
         # Write losses in logs
         f = open('{}/{}/test_logs.csv'.format(model_path, model_name), 'a')

@@ -2,12 +2,7 @@ import pandas as pd
 import numpy as np
 
 
-elements = []
-f = open('models/bert_tokenizer_dic/bert_tok.txt', 'r', encoding='utf-8')
+elements = np.arange(10)
 
-text = f.read()
-
-dic = text.split('\n')
-
-for itm in dic:
-    print(itm)
+print(elements)
+print(elements[1:-1])
