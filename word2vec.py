@@ -110,12 +110,12 @@ def train_Word2Vec():
             print('Fail to load optimizer weights')
         # Load epoch index if the model exists
         train_logs = pd.read_csv('{}/{}/train_logs.csv'.format(model_path, model_name), sep=',')
-        epoch_idx = train_logs[-1, 0] + 1
+        epoch_idx = int(train_logs.iloc[-1]['Epoch']) + 1
 
 
     for i in range(epoch_idx, epoch):
 
-        print('Taining epoch {} / {}'.format(epoch_idx, epoch))
+        print('Taining epoch {} / {}'.format(i, epoch))
         loop = tqdm(train_loader, leave=True)
 
         model.train()
@@ -146,7 +146,7 @@ def train_Word2Vec():
             # Store logs
             tb.add_scalar('Train_Loss_{}'.format(model_name), loss.item(), i)
             train_loss.append(loss.item())
-            loop.set_postfix(loss=loss.item)
+            loop.set_postfix(loss=loss.item())
             torch.cuda.empty_cache()
 
         # Write losses in logs
@@ -158,7 +158,7 @@ def train_Word2Vec():
         # Testing step
         model.eval()
         test_loss = []
-        print('Testing epoch {} / {}'.format(epoch_idx, epoch))
+        print('Testing epoch {} / {}'.format(i, epoch))
         loop = tqdm(test_loader, leave=True)
         for step, batch in enumerate(test_loader):
             with torch.no_grad():
@@ -179,7 +179,7 @@ def train_Word2Vec():
                 # Store logs
                 tb.add_scalar('Test_Loss_{}'.format(model_name), loss.item(), i)
                 test_loss.append(loss.item())
-                loop.set_postfix(loss=loss.item)
+                loop.set_postfix(loss=loss.item())
                 torch.cuda.empty_cache()
 
         # Write losses in logs
