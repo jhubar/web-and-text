@@ -31,7 +31,7 @@ class SentimentModel(torch.nn.Module):
                                    bidirectional=True,
                                    batch_first=True)
 
-        # Fully connected layers to apply 
+        # Fully connected layers to apply
 
     def forward(self, x):
 

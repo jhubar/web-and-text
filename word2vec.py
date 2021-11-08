@@ -35,8 +35,9 @@ class Word2Vec(torch.nn.Module):
         given dictionary
         """
         # Get shape:
-        N = x.shape[0]
-        lng = x.shape[1]
+        if get_embed:
+            N = x.shape[0]
+            lng = x.shape[1]
 
         # Transform index sequence in one hot encoding
         x = torch.nn.functional.one_hot(x, num_classes=self.voc_size)
@@ -128,6 +129,11 @@ def train_Word2Vec():
 
             # Get input ids (NOTE: batch[1] return attention mask and batch[2] return sentiments
             input_ids = torch.flatten(batch[0].to(device))
+            mask = torch.flatten(batch[1].to(device))
+
+            # Only get non-padding elements
+            tmp_ids = input_ids[mask == 1]
+            input_ids = tmp_ids
 
             # Extend with zero at the begin and at the end
             ext_input_ids = torch.zeros(input_ids.size(0) + 2).to(device)
