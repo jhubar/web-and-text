@@ -34,6 +34,9 @@ class Word2Vec(torch.nn.Module):
         Input must be one hot one hot encoding vectors of the size of the
         given dictionary
         """
+        # Get shape:
+        N = x.shape[0]
+        lng = x.shape[1]
 
         # Transform index sequence in one hot encoding
         x = torch.nn.functional.one_hot(x, num_classes=self.voc_size)
@@ -43,11 +46,12 @@ class Word2Vec(torch.nn.Module):
         x = self.layer_A(x.float())
         # If we want to get embedding, we can stop here
         if get_embed:
-            return x
+            return x.reshape(N, lng, self.embed_size)
         # Predict context words probabilities
         x = self.layer_B(x)
         # Apply the softmax and return
         return self.sm(x)
+
 
 
 def train_Word2Vec():
@@ -57,7 +61,7 @@ def train_Word2Vec():
     epoch = 20
     batch_size = 15
     model_name = 'word2vec'
-    model_path = 'G:/web_and_text_project/data/Large_movie_dataset/word2vec_model'
+    model_path = 'D:/web_and_text_project/data/Large_movie_dataset/word2vec_model'
     device = "cuda" if torch.cuda.is_available() else "cpu"
     num_workers = 4
 
