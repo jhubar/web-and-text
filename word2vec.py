@@ -27,7 +27,7 @@ class Word2Vec(torch.nn.Module):
         self.layer_B = torch.nn.Linear(in_features=self.embed_size,
                                        out_features=self.voc_size)
         # The softmax of the output
-        self.sm = torch.nn.Softmax(dim=0)
+        self.sm = torch.nn.LogSoftmax(dim=0)
 
         # Xavier initialization on weights
         torch.nn.init.xavier_uniform_(self.layer_A.weight)
