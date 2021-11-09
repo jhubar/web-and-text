@@ -10,7 +10,7 @@ import os
 class TrainSetBuilder():
 
     def __init__(self,
-                 data_path="G:/web_and_text_project/data/Large_movie_dataset/aclImdb/",
+                 data_path="D:/web_and_text_project/data/Large_movie_dataset/aclImdb/",
                  load_pickle=True,
                  num_workers=0,
                  batch_size=10):
