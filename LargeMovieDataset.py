@@ -13,7 +13,8 @@ class TrainSetBuilder():
                  data_path="D:/web_and_text_project/data/Large_movie_dataset/aclImdb/",
                  load_pickle=True,
                  num_workers=0,
-                 batch_size=10):
+                 batch_size=10,
+                 pin_memory=False):
         """
         This class manage the building of the LargeMovieDataset building
         and use.
@@ -38,7 +39,8 @@ class TrainSetBuilder():
         self.max_len = 500      # Maximum number of words in a sequence
         self.train_split = 0.8  # Propotion of the dataset for training set
         self.batch_size = batch_size    # Number of elements in a batch
-        self.num_workers=num_workers
+        self.num_workers = num_workers
+        self.pin_memory = pin_memory
 
         # Training dataset
         self.train_dataset = None
@@ -166,12 +168,14 @@ class TrainSetBuilder():
             self.train_dataset,
             sampler=RandomSampler(self.train_dataset),
             batch_size=self.batch_size,
-            num_workers=self.num_workers)
+            num_workers=self.num_workers,
+            pin_memory=self.pin_memory)
 
         self.test_handler = DataLoader(
             self.test_dataset,
             sampler=SequentialSampler(self.test_dataset),
-            batch_size=self.batch_size)
+            batch_size=self.batch_size,
+            pin_memory=self.pin_memory)
         print('... Done')
         print('End of dataset encoding.')
 

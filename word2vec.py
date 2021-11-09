@@ -12,7 +12,7 @@ class Word2Vec(torch.nn.Module):
 
     def __init__(self,
                  input_voc,
-                 embed_size=200):
+                 embed_size=100):
         super(Word2Vec, self).__init__()
 
         self.dic = input_voc
@@ -29,25 +29,35 @@ class Word2Vec(torch.nn.Module):
         # The softmax of the output
         self.sm = torch.nn.Softmax(dim=0)
 
+        # Xavier initialization on weights
+        torch.nn.init.xavier_uniform_(self.layer_A.weight)
+        torch.nn.init.xavier_uniform_(self.layer_B.weight)
+
     def forward(self, x, get_embed=False):
         """
         Input must be one hot one hot encoding vectors of the size of the
         given dictionary
         """
         # Get shape:
-        if get_embed:
-            N = x.shape[0]
-            lng = x.shape[1]
+        N = x.shape[0]      # Number of sequences in the batch
+        lng = x.shape[1]    # Size of the sequences
+
+        # Flatten in one vector of index
+        x = torch.flatten(x)
 
         # Transform index sequence in one hot encoding
         x = torch.nn.functional.one_hot(x, num_classes=self.voc_size)
-        # First build the input vector
+
+        # First build the input vector in one hot encoding
         x = x.reshape(-1, self.voc_size)
+
         # Apply the first layer
         x = self.layer_A(x.float())
+
         # If we want to get embedding, we can stop here
         if get_embed:
             return x.reshape(N, lng, self.embed_size)
+
         # Predict context words probabilities
         x = self.layer_B(x)
         # Apply the softmax and return
@@ -58,27 +68,27 @@ class Word2Vec(torch.nn.Module):
 def train_Word2Vec():
 
     # Hyperparameters
-    learning_rate = 1e-5
+    embed_size = 100
+    learning_rate = 1e-4
     epoch = 20
-    batch_size = 15
+    batch_size = 20
     model_name = 'word2vec'
     model_path = 'D:/web_and_text_project/data/Large_movie_dataset/word2vec_model'
     device = "cuda" if torch.cuda.is_available() else "cpu"
     num_workers = 4
+    pin_memory = True
 
 
     # Load the dataset
     print('Dataset Loading...')
-    data_builder = LargeMovieDataset.TrainSetBuilder(num_workers=num_workers, batch_size=batch_size)
+    data_builder = LargeMovieDataset.TrainSetBuilder(num_workers=num_workers, batch_size=batch_size, pin_memory=pin_memory)
     data_builder.import_cine_data()
     print('... Done')
     # Get data loaders
     train_loader, test_loader = data_builder.get_data_loader()
-    # Get the tokenier object
-    tokenizer = data_builder.get_tokenizer()
 
     # Instanciate the model
-    model = Word2Vec(input_voc=data_builder.dictionary).to(device)
+    model = Word2Vec(input_voc=data_builder.dictionary, embed_size=embed_size).to(device)
 
     # The optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -107,6 +117,7 @@ def train_Word2Vec():
             print('Previous model loaded')
         except:
             print('Impossible to load existing model: start a new one')
+            sys.exit(1)
         # Try to load optimizer weights
         try:
             optimizer.load_state_dict(torch.load('{}/{}/optimizer_weights.pt'.format(model_path, model_name)))
@@ -125,7 +136,7 @@ def train_Word2Vec():
 
         model.train()
         train_loss = []
-        for step, batch in enumerate(train_loader):
+        for step, batch in enumerate(loop):
 
             # Get input ids (NOTE: batch[1] return attention mask and batch[2] return sentiments
             input_ids = torch.flatten(batch[0].to(device))
@@ -139,8 +150,11 @@ def train_Word2Vec():
             ext_input_ids = torch.zeros(input_ids.size(0) + 2).to(device)
             ext_input_ids[1:-1] = input_ids
 
+            # Reshape the tensor as an only sequence
+            input_ids = input_ids.reshape(1, -1)    # Not one hot encoding, just sequences who contain the index of the one hot
+
             # makes predictions:
-            preds = model(torch.tensor(input_ids))
+            preds = model(input_ids)
 
             # Compute the loss for left and right context words
             loss = loss_obj(preds, ext_input_ids[0:-2].long()) + \
@@ -170,14 +184,22 @@ def train_Word2Vec():
         test_loss = []
         print('Testing epoch {} / {}'.format(i, epoch))
         loop = tqdm(test_loader, leave=True)
-        for step, batch in enumerate(test_loader):
+        for step, batch in enumerate(loop):
             with torch.no_grad():
                 # Get input ids (NOTE: batch[1] return attention mask and batch[2] return sentiments
                 input_ids = torch.flatten(batch[0].to(device))
+                mask = torch.flatten(batch[1].to(device))
+
+                # Only get non-padding elements
+                tmp_ids = input_ids[mask == 1]
+                input_ids = tmp_ids
 
                 # Extend with zero at the begin and at the end
                 ext_input_ids = torch.zeros(input_ids.size(0) + 2).to(device)
                 ext_input_ids[1:-1] = input_ids
+
+                # Reshape the tensor as an only sequence
+                input_ids = input_ids.reshape(1, -1)
 
                 # makes predictions:
                 preds = model(torch.tensor(input_ids))
