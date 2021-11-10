@@ -5,11 +5,58 @@ import sys
 from word2vec import Word2Vec
 from LargeMovieDataset import TrainSetBuilder
 import torch.nn as nn
+import math
+
+
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, embed_size=50, max_len=400):
+        super(PositionalEncoding, self).__init__()
+
+        self.embed_size = embed_size
+        self.max_len = max_len
+
+        # Store a matrix with all possible positions
+        pe = torch.zeros(embed_size, max_len)
+        for pos in range(0, max_len):
+            for i in range(0, embed_size, 2):
+                pe[i, pos] = math.sin(pos / (10000 ** ((2 * i) / embed_size)))
+                pe[i + 1, pos] = math.cos(pos / (10000 ** ((2 * (i + 1)) / embed_size)))
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+
+        # Get seq size
+        seq_len = x.size(2)
+
+        # If size is greater that pos embedding saved in memory:
+        if seq_len > self.max_len:
+            self.adapt_len(seq_len)
+
+        # Add positional embedding
+        x = x[:, 0:self.embed_size, 0:seq_len] + self.pe[:, :seq_len].to('cuda:0')
+        return x
+
+    def adapt_len(self, new_len):
+
+        self.max_len = new_len
+
+        # Store a matrix with all possible positions
+        pe = torch.zeros(self.embed_size, self.max_len)
+        for pos in range(0, self.max_len):
+            for i in range(0, self.embed_size, 2):
+                pe[i, pos] = math.sin(pos / (10000 ** ((2 * i) / self.embed_size)))
+                pe[i + 1, pos] = math.cos(pos / (10000 ** ((2 * (i + 1)) / self.embed_size)))
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
 
 class SelfAttention(nn.Module):
     """
     The self attetion module
     """
+
     def __init__(self, embed_size=2048, nb_heads=4):
         """
         :param embed_size: This size is the kernel size of the enbedding
@@ -36,9 +83,7 @@ class SelfAttention(nn.Module):
         # The softmax step
         self.sm = nn.Softmax(dim=3)
 
-
     def forward(self, values, keys, query, mask=None):
-
         # Get the number of training samples
         n = query.shape[0]
         # Get original shapes
@@ -64,7 +109,7 @@ class SelfAttention(nn.Module):
             prdc = prdc.masked_fill(mask == 0, float('-1e20'))  # don't use zero
 
         # The softmax step
-        #attention = self.sm(prdc / (self.embed_size ** (1/2)))
+        # attention = self.sm(prdc / (self.embed_size ** (1/2)))
         attention = torch.softmax(prdc / (self.embed_size ** (1 / 2)), dim=3)
 
         # Product with values
@@ -77,6 +122,7 @@ class SelfAttention(nn.Module):
         # Feed the last layer
         return self.fc_concat(out)
 
+
 class SentimentModel(torch.nn.Module):
 
     def __init__(self,
@@ -85,13 +131,13 @@ class SentimentModel(torch.nn.Module):
                  device='cpu',
                  embedding=None,
                  sentences_length=500):
-
         super(SentimentModel, self).__init__()
         self.name = name
         self.embed_size = embed_size
         self.device = device
         self.hidden_size = 1024
         self.sentences_length = sentences_length
+        self.nb_heads = 4  # Number of heads for multi head self attention
 
         # Store the embedding layer: the model have to be given in parameters
         self.embed_layer = embedding
@@ -105,13 +151,20 @@ class SentimentModel(torch.nn.Module):
                                    bidirectional=True,
                                    batch_first=True)
 
+        # Positional encoding to apply before the self attention
+        self.pos_encod = PositionalEncoding(embed_size=self.hidden_size * 2,
+                                            max_len=self.sentences_length)
         # For attention step:
-        self.att = SelfAttention()
+        self.att = SelfAttention(embed_size=self.hidden_size * 2,
+                                 nb_heads=self.nb_heads)
 
-        # A final layer to produce a sequence of values between 0 and 1
+        # Classify each word with a value between -1 and 1
+        self.word_fc = torch.nn.Linear(in_features=self.hidden_size * 2,
+                                       out_features=1)
+        # Tanh activation for this layer
+        self.word_sig = torch.nn.Sigmoid()
 
     def forward(self, x):
-
         # Get the embedding of inputs
         with torch.no_grad():
             embed_x = self.embed_layer.forward(x, get_embed=True)
@@ -126,15 +179,19 @@ class SentimentModel(torch.nn.Module):
             print('final_hidden_state: {}'.format(final_h_states.shape))
             print('final_cell_state: {}'.format(final_c_state.shape))
 
+        # Apply positional encoding:
+        hid_states = self.pos_encod(hid_states)
         # Apply self attention
         after_attention = self.att(hid_states, hid_states, hid_states)
 
-        print(after_attention.shape)
-        sys.exit(0)
+        # Apply fully connected layer sigmoid activation
+        words_values = self.word_fc(after_attention)
+        words_values = self.word_sig(words_values)
 
+        # Do the mean
+        outputs = torch.mean(words_values, dim=-1)
 
-
-
+        return outputs, words_values
 
 
 if __name__ == '__main__':
@@ -177,17 +234,9 @@ if __name__ == '__main__':
                             device=device,
                             embedding=embedder)
 
-
     # Reading loop
     for step, batch in enumerate(train_loader):
-
         # Get one-hot indexes vector
         input_ids = batch[0]
 
         preds = engine(input_ids)
-
-
-
-
-
-
